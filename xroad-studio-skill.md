@@ -4,7 +4,7 @@ Use this file as context in Claude Code or a Claude Project to let Claude schedu
 
 **What you can do with this skill:**
 - List your connected social accounts
-- Upload media (files up to 250 MB, or re-host expiring URLs from DALL-E, Canva, Google Drive, etc.)
+- Upload media (files up to 1 GB, or re-host expiring URLs from DALL-E, Canva, Google Drive, etc. — max 20 MB for URL mode)
 - Schedule or immediately publish posts to Instagram, TikTok, LinkedIn, X, YouTube, Facebook, Pinterest, Bluesky, Threads
 - List, edit, and cancel scheduled posts
 
@@ -57,7 +57,7 @@ Response:
 
 Two modes — use whichever fits:
 
-**Option A: Upload a file (up to 250 MB)**
+**Option A: Upload a file (up to 1 GB)**
 
 ```bash
 curl -X POST https://xroadstudio.com/api/v1/media \
@@ -253,7 +253,7 @@ All errors return `{ "error": { "code": "...", "message": "..." } }`.
 
 - Rate limit: 60 requests / 60 seconds per key
 - Monthly post quota: Starter 30/mo, Creator 120/mo, Business 500/mo (shared with dashboard)
-- Media file upload: 250 MB max
+- Media file upload: 1 GB max
 - Media URL re-host: 20 MB max
 - `scheduled_at`: minimum 30 seconds in future, maximum 3 months out
 - 1 active API key per account (revoke existing key to rotate)
