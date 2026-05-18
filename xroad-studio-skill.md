@@ -83,6 +83,8 @@ The returned URL is permanent. Use it as `media_url` in the post creation call b
 
 Google Drive tip: use `https://drive.google.com/uc?export=download&id=FILE_ID` (file must be shared publicly).
 
+> **Important:** After upload, always verify the media URL is reachable before creating the post (see Safe Media Posting workflow below). Videos in particular can take 10-15s to finish processing on the CDN.
+
 ---
 
 ### Create a post
@@ -202,29 +204,90 @@ Response: `{ "data": { "id": "...", "status": "cancelled" } }`
 
 ## Common workflows
 
+### Safe media posting (ALWAYS use this when posting with media)
+
+Never post immediately after upload — the CDN needs time to propagate. Images take ~5s, videos can take 10-15s. Always verify the URL returns 200 before creating the post.
+
+```bash
+# 1. Upload media and get permanent URL
+MEDIA_URL=$(curl -s -X POST https://xroadstudio.com/api/v1/media \
+  -H "Authorization: Bearer $XROAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"$SOURCE_URL\"}" | jq -r '.data.url')
+
+if [ -z "$MEDIA_URL" ] || [ "$MEDIA_URL" = "null" ]; then
+  echo "Media upload failed" && exit 1
+fi
+
+# 2. Poll until media is live on CDN (every 5s, max 15 attempts = 75s timeout)
+MAX_ATTEMPTS=15
+ATTEMPT=0
+while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MEDIA_URL")
+  if [ "$STATUS" = "200" ]; then
+    echo "Media verified live after $((ATTEMPT * 5))s"
+    break
+  fi
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+    echo "Media never became available after ${MAX_ATTEMPTS}x5s — aborting" && exit 1
+  fi
+  sleep 5
+done
+
+# 3. Get account ID
+ACCOUNT_ID=$(curl -s https://xroadstudio.com/api/v1/accounts \
+  -H "Authorization: Bearer $XROAD_API_KEY" \
+  | jq -r '.data[] | select(.platform=="instagram") | .id')
+
+# 4. Now safe to post
+curl -s -X POST https://xroadstudio.com/api/v1/posts \
+  -H "Authorization: Bearer $XROAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"caption\": \"Your caption here\",
+    \"social_account_ids\": [\"$ACCOUNT_ID\"],
+    \"media_url\": \"$MEDIA_URL\"
+  }"
+```
+
+Why 75s max? Images are ready in 1-2 polls (5-10s). Videos can take 10-15s to transcode. 75s gives comfortable headroom for large video files without blocking forever.
+
+---
+
 ### Post an AI-generated image immediately
 
 ```bash
-# 1. Re-host the expiring image URL
-MEDIA=$(curl -s -X POST https://xroadstudio.com/api/v1/media \
+SOURCE_URL="<dalle-or-other-expiring-url>"
+
+# 1. Re-host to permanent URL
+MEDIA_URL=$(curl -s -X POST https://xroadstudio.com/api/v1/media \
   -H "Authorization: Bearer $XROAD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"url":"<dalle-url>"}' | jq -r '.data.url')
+  -d "{\"url\":\"$SOURCE_URL\"}" | jq -r '.data.url')
 
-# 2. Get account IDs
+# 2. Verify media is live (poll every 5s, max 15 tries)
+for i in $(seq 1 15); do
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "$MEDIA_URL")" = "200" ] && break
+  [ $i -eq 15 ] && echo "Media not available — aborting" && exit 1
+  sleep 5
+done
+
+# 3. Get account ID + post
 ACCOUNT=$(curl -s https://xroadstudio.com/api/v1/accounts \
   -H "Authorization: Bearer $XROAD_API_KEY" | jq -r '.data[0].id')
 
-# 3. Publish now (no scheduled_at)
 curl -X POST https://xroadstudio.com/api/v1/posts \
   -H "Authorization: Bearer $XROAD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"caption\":\"Check this out!\",\"social_account_ids\":[\"$ACCOUNT\"],\"media_url\":\"$MEDIA\"}"
+  -d "{\"caption\":\"Check this out!\",\"social_account_ids\":[\"$ACCOUNT\"],\"media_url\":\"$MEDIA_URL\"}"
 ```
 
 ### Schedule a week of posts from an n8n loop
 
 In n8n: use an HTTP Request node for each step. Set `Authentication: Header Auth`, key `Authorization`, value `Bearer {{$credentials.xroadApiKey}}`. Import `/openapi.json` at `https://xroadstudio.com/openapi.json` for schema auto-complete.
+
+For media verification in n8n: add a Wait node (5s) after the media upload, then an HTTP Request node doing a GET on the media URL. Use an IF node to check status code = 200 before proceeding to post creation. Loop back to the Wait node if not yet 200 (up to 15 iterations).
 
 ---
 
